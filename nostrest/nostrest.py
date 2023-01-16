@@ -98,7 +98,6 @@ class Nostrest:
                 self.on_event,
             ),
         )
-        self.poller.daemon = True
         self.is_running = True
         self.poller.start()
 
