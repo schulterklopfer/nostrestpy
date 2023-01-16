@@ -1,0 +1,14 @@
+cffi==1.15.1
+cryptography==39.0.0
+gevent==22.10.2
+greenlet==2.0.1
+nostr @ file:///Users/jash/src/python-nostr
+pycparser==2.21
+pycryptodomex==3.16.0
+secp256k1==0.14.0
+tomli==2.0.1
+urllib3==1.26.14
+uuid==1.30
+websocket-client==1.4.2
+zope.event==4.6
+zope.interface==5.5.2
