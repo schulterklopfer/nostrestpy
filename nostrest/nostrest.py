@@ -4,6 +4,7 @@ import uuid
 from typing import *
 import time
 import json
+import base64
 
 from urllib.parse import urlparse
 from nostr.event import EventKind, Event
@@ -13,6 +14,7 @@ from nostr.message_pool import EventMessage
 from nostr.message_type import ClientMessageType
 from nostr.relay_manager import RelayManager
 from concurrent.futures import ThreadPoolExecutor
+from cryptography.hazmat.primitives import hashes
 
 from nostrest.event_utils import encrypt_to_event, decrypt_event, NOSTREST_EPHEMERAL_EVENT_KIND
 from nostrest.jsonrpcish import JsonRpcRequest, JsonRpcResponse, JsonRpcNostrestParams
@@ -22,13 +24,19 @@ from typing import Callable
 from nostrest.restresponse import RestResponse
 
 
+def generate_token_id(token: str):
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(bytes(token, 'utf-8'))
+    return base64.b64encode(digest.finalize()[0:8]).decode('utf-8').replace('=', '')
+
+
 class Nostrest:
     relay_manager: RelayManager = RelayManager()
     pending_requests: dict[str, NostrRequest] = {}
     static_private_key: PrivateKey
     poller: threading.Thread
     mint_public_key: str
-    direct_message_callback: Callable[[str, str], None]
+    token_received_callback: Callable[[str, str], bool]
     is_running: bool = False
 
     def __init__(self, static_privatekey_hex: str = None):
@@ -66,7 +74,7 @@ class Nostrest:
             self.pending_requests[json_rpc_req.id] = NostrRequest(private_key, event, json_rpc_req)
         self.send_event(event)
         currs = ThreadPoolExecutor(max_workers=3)
-        curr_future_result = currs.submit(self.wait_for_result, json_rpc_req.id, 5)
+        curr_future_result = currs.submit(self.wait_for_result, json_rpc_req.id, 2)
         currs.shutdown(wait=True)
         response_event = curr_future_result.result()
         with self.lock:
@@ -76,22 +84,54 @@ class Nostrest:
     def wait_for_result(self, json_rpc_req_id, max_wait_time_seconds: int = 0):
         started_at = time.time()
         while json_rpc_req_id in self.pending_requests.keys() and \
-                self.pending_requests[json_rpc_req_id].json_rpc_response is None:
+                self.pending_requests[json_rpc_req_id].response is None:
             if max_wait_time_seconds > 0 and time.time() - started_at > max_wait_time_seconds:
                 print("request timed out")
                 break
             time.sleep(0.1)
-        return self.pending_requests[json_rpc_req_id].json_rpc_response \
+        return self.pending_requests[json_rpc_req_id].response \
             if json_rpc_req_id in self.pending_requests.keys() else None
+
+    def send_token_and_wait_for_received(self, token: str, private_key: PrivateKey,
+                                         to_public_key_hex: str):
+        event = encrypt_to_event(EventKind.ENCRYPTED_DIRECT_MESSAGE, 'cashu://' + token, private_key, to_public_key_hex)
+        token_id = generate_token_id(token)
+        with self.lock:
+            self.pending_requests[token_id] = NostrRequest(private_key, event, 'cashu://' + token)
+        self.send_event(event)
+        currs = ThreadPoolExecutor(max_workers=3)
+        curr_future_result = currs.submit(self.wait_for_token_thx, token_id, 0.5)
+        currs.shutdown(wait=True)
+        received = curr_future_result.result()
+        with self.lock:
+            del self.pending_requests[token_id]
+        return received
+
+    def wait_for_token_thx(self, token_id, max_wait_time_seconds: int = 0):
+        started_at = time.time()
+        while token_id in self.pending_requests.keys() and \
+                self.pending_requests[token_id].response is None:
+            if max_wait_time_seconds > 0 and time.time() - started_at > max_wait_time_seconds:
+                print("No thx received. How rude")
+                break
+            time.sleep(0.1)
+
+        if token_id not in self.pending_requests.keys():
+            return False
+
+        if self.pending_requests[token_id].response is None:
+            return False
+
+        return self.pending_requests[token_id].response
 
     def send_henlo(self):
         return self.send_request_and_wait_for_response(JsonRpcRequest('ididid', 'HENLO'), self.static_private_key,
                                                        self.mint_public_key)
 
     def start(self, mint_public_key: str, seed_relays: List[str] = [],
-              direct_message_callback: Callable[[str, str], None] = None):
+              token_received_callback: Callable[[str, str], bool] = None):
         self.mint_public_key = mint_public_key
-        self.direct_message_callback = direct_message_callback
+        self.token_received_callback = token_received_callback
         self.poller = threading.Thread(
             target=self.poll,
             args=(
@@ -137,24 +177,34 @@ class Nostrest:
         self.relay_manager.close_connections()
 
     def on_event(self, event_msg: EventMessage):
-        if self.direct_message_callback is not None and event_msg.event.kind == EventKind.ENCRYPTED_DIRECT_MESSAGE:
+        if self.token_received_callback is not None and event_msg.event.kind == EventKind.ENCRYPTED_DIRECT_MESSAGE:
             decrypted_content = decrypt_event(event_msg.event, self.static_private_key)
             if decrypted_content is not None:
-                self.direct_message_callback(event_msg.event.public_key, decrypted_content)
+                if decrypted_content.lower().startswith('cashu://'):
+                    token = decrypted_content[8:]
+                    token_id = generate_token_id(token)
+                    if self.token_received_callback(event_msg.event.public_key, token):
+                        self.send_encrypted_message_to( NOSTREST_EPHEMERAL_EVENT_KIND, 'thx:' + token_id, event_msg.event.public_key)
         else:
             if event_msg.event.kind == NOSTREST_EPHEMERAL_EVENT_KIND:
                 decrypted_content = decrypt_event(event_msg.event, self.static_private_key)
                 if decrypted_content is not None:
-                    json_rpc_response = JsonRpcResponse.from_json(decrypted_content)
-                    if json_rpc_response is not None and json_rpc_response.id in self.pending_requests.keys():
-                        with self.lock:
-                            self.pending_requests[json_rpc_response.id].json_rpc_response = json_rpc_response
+                    if decrypted_content.lower().startswith('thx:'):
+                        token_id = decrypted_content[4:]
+                        if token_id is not None and token_id in self.pending_requests.keys():
+                            with self.lock:
+                                self.pending_requests[token_id].response = True
+                    else:
+                        json_rpc_response = JsonRpcResponse.from_json(decrypted_content)
+                        if json_rpc_response is not None and json_rpc_response.id in self.pending_requests.keys():
+                            with self.lock:
+                                self.pending_requests[json_rpc_response.id].response = json_rpc_response
 
     def generate_static_key(self, privatekey_hex: str = None):
         pk = bytes.fromhex(privatekey_hex) if privatekey_hex else None
         self.static_private_key = PrivateKey(pk)
 
-    def send_direct_message(self, event_kind, message: str, to_pubkey_hex: str):
+    def send_encrypted_message_to(self, event_kind, message: str, to_pubkey_hex: str):
         event = encrypt_to_event(event_kind, message, self.static_private_key, to_pubkey_hex)
         self.send_event(event)
 
@@ -163,6 +213,12 @@ class Nostrest:
 
     def get(self, rel_url: str, json: dict = None, params: dict = None):
         return self.__rest_request('get', rel_url, json, params)
+
+    def send_token(self, token: str, to_pubkey_hex: str):
+        return self.send_token_and_wait_for_received(token, self.static_private_key, to_pubkey_hex)
+
+    def send_dm(self, message: str, to_pubkey_hex: str):
+        return self.send_encrypted_message_to(EventKind.ENCRYPTED_DIRECT_MESSAGE, message, to_pubkey_hex)
 
     def __rest_request(self, method: str, rel_url: str, json: dict = None, params: dict = None):
         parse_result = urlparse(rel_url)
