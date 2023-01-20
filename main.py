@@ -27,7 +27,10 @@ def cb(from_pubkey_hex: str, messsage: str) -> bool:
     return True
 
 #async def main():
-nostrest = Nostrest(static_privatekey_hex="8f27ea9abe6345d9276c0881b85dca6ff16188dc71d8abefd04a944e8a80e203")
+nostrest = Nostrest(
+    state_file='./nostrest_state.json',
+    static_privatekey_hex="8f27ea9abe6345d9276c0881b85dca6ff16188dc71d8abefd04a944e8a80e203"
+)
 
 nostrest.start(
     mint_public_key="8e70c70ceff84b8ff2b95bc35f12f766c24bca06256beb07846b736a0fa6cb99",
@@ -48,6 +51,6 @@ if resp:
 
 received = nostrest.send_token( 'token', 'b9b8a9749442726a99b2e6d194d14d907857a10786ae0c47f79a07c31149e27d')
 
-nostrest.stop()
+#nostrest.stop()
 #asyncio.run(main())
 

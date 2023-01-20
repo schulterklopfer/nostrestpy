@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives import hashes
 
 from nostrest.event_utils import encrypt_to_event, decrypt_event, NOSTREST_EPHEMERAL_EVENT_KIND
 from nostrest.jsonrpcish import JsonRpcRequest, JsonRpcResponse, JsonRpcNostrestParams
+from nostrest.nostreststate import NostrestState
 from nostrest.nostrrequest import NostrRequest
 from typing import Callable
 
@@ -38,23 +39,25 @@ class Nostrest:
     mint_public_key: str
     token_received_callback: Callable[[str, str], bool]
     is_running: bool = False
+    state_file: str
+    state: NostrestState
 
-    def __init__(self, static_privatekey_hex: str = None):
+    def __init__(self, state_file: str, static_privatekey_hex: str = None):
         self.generate_static_key(static_privatekey_hex)
         self.lock = threading.Lock()
+        self.state_file = state_file
+        self.state = NostrestState.from_file(self.state_file)
         print("my public key is: " + self.static_private_key.public_key.hex())
 
     def subscribe(self):
         # subscribe to all encrypted dms for me
-        filters = Filters(
-            [
-                Filter(
-                    kinds=[EventKind.ENCRYPTED_DIRECT_MESSAGE, NOSTREST_EPHEMERAL_EVENT_KIND],
-                    tags={"#p": [self.static_private_key.public_key.hex()]},
-                    limit=0
-                )
-            ]
+        filter = Filter(
+            kinds=[EventKind.ENCRYPTED_DIRECT_MESSAGE, NOSTREST_EPHEMERAL_EVENT_KIND],
+            tags={"#p": [self.static_private_key.public_key.hex()]},
         )
+        if self.state.latest_event_at > 0:
+            filter.since = self.state.latest_event_at
+        filters = Filters([filter])
         subscription_id = str(uuid.uuid4())
         self.relay_manager.add_subscription(subscription_id, filters)
 
@@ -190,8 +193,11 @@ class Nostrest:
                 if decrypted_content.lower().startswith('cashu://'):
                     token = decrypted_content[8:]
                     token_id = generate_token_id(token)
+                    self.state.latest_event_at = event_msg.event.created_at
+                    self.state.save(self.state_file)
                     if self.token_received_callback(event_msg.event.public_key, token):
-                        self.send_encrypted_message_to( NOSTREST_EPHEMERAL_EVENT_KIND, 'thx:' + token_id, event_msg.event.public_key)
+                        self.send_encrypted_message_to(NOSTREST_EPHEMERAL_EVENT_KIND, 'thx:' + token_id,
+                                                       event_msg.event.public_key)
         else:
             if event_msg.event.kind == NOSTREST_EPHEMERAL_EVENT_KIND:
                 decrypted_content = decrypt_event(event_msg.event, self.static_private_key)

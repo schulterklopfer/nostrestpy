@@ -1,5 +1,7 @@
 import json
 
+from nostrest.del_none import del_none
+
 
 class JsonRpcNostrestParams:
     endpoint: str
@@ -170,12 +172,3 @@ class JsonRpcResponse:
             return JsonRpcResponse(id, result, error)
         except:
             return None
-
-
-def del_none(d):
-    for key, value in list(d.items()):
-        if value is None:
-            del d[key]
-        elif isinstance(value, dict):
-            del_none(value)
-    return d  # For convenience
