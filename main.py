@@ -48,6 +48,6 @@ if resp:
 
 received = nostrest.send_token( 'token', 'b9b8a9749442726a99b2e6d194d14d907857a10786ae0c47f79a07c31149e27d')
 
-#nostrest.stop()
+nostrest.stop()
 #asyncio.run(main())
 

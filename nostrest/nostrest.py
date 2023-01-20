@@ -143,9 +143,7 @@ class Nostrest:
 
         for relay in seed_relays:
             self.relay_manager.add_relay(relay)
-        self.relay_manager.open_connections(
-            # {"cert_reqs": ssl.CERT_NONE}
-        )  # NOTE: This disables ssl certificate verification
+        self.relay_manager.open_connections()
 
         # TODO: fix. this is not cool
         time.sleep(1.25)  # allow the connections to open...
@@ -163,11 +161,20 @@ class Nostrest:
             print("no itsme message")
             return False
 
+        self.relay_manager.close_connections()
         # remove old relay urls
-        #        self.relay_manager.relays.clear()
-        #        for relay_url in itsme.result['relays']:
-        #            self.relay_manager.add_relay(relay_url)
-        # self.subscribe()
+        self.relay_manager.relays.clear()
+
+        # add new relay urls
+        for relay_url in itsme.result['relays']:
+            self.relay_manager.add_relay(relay_url)
+
+        # use the new relays and subscribe
+        self.relay_manager.open_connections()
+        # TODO: fix. this is not cool
+        time.sleep(1.25)  # allow the connections to open...
+        self.subscribe()
+
         return True
 
     def stop(self):
