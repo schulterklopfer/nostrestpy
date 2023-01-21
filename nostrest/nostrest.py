@@ -110,14 +110,7 @@ class Nostrest:
         with self.lock:
             del self.pending_requests[json_rpc_req.id]
             del self.pending_keys[private_key.public_key.hex()]
-        self._send_event(
-            encrypt_to_event(
-                NOSTREST_EPHEMERAL_EVENT_KIND,
-                JsonRpcRequest(str(uuid.uuid4()), 'GOTIT', {'eventId': event.id}).to_json(),
-                private_key,
-                to_public_key_hex
-            )
-        )
+        self._send_gotit(event.id, private_key)
         return response_event
 
     def _wait_for_result(self, json_rpc_req_id, max_wait_time_seconds: int = 0):
@@ -167,6 +160,16 @@ class Nostrest:
     def _send_henlo(self):
         return self._send_request_and_wait_for_response(JsonRpcRequest(str(uuid.uuid4()), 'HENLO'),
                                                         self.mint_public_key)
+
+    def _send_gotit(self, event_id, private_key):
+        self._send_event(
+            encrypt_to_event(
+                NOSTREST_EPHEMERAL_EVENT_KIND,
+                JsonRpcRequest(str(uuid.uuid4()), 'GOTIT', {'eventId': event_id}).to_json(),
+                private_key,
+                self.mint_public_key
+            )
+        )
 
     def _on_event(self, event_msg: EventMessage):
         if self.token_received_callback is not None and event_msg.event.kind == EventKind.ENCRYPTED_DIRECT_MESSAGE:
