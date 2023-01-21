@@ -5,13 +5,11 @@ from nostrest.jsonrpcish import JsonRpcRequest, JsonRpcResponse
 
 
 class NostrRequest:
-    private_key: PrivateKey
     event: Event
     request: any
     response: any
 
-    def __init__(self, private_key: PrivateKey, event: Event, request: any):
-        self.private_key = private_key
+    def __init__(self, event: Event, request: any):
         self.event = event
         self.request = request
         self.response = None
