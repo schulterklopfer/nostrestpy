@@ -47,9 +47,9 @@ class JsonRpcRequest:
     jsonrpc: str
     id: str
     method: str
-    params: JsonRpcNostrestParams
+    params: dict
 
-    def __init__(self, id: str, method: str, params: JsonRpcNostrestParams = None):
+    def __init__(self, id: str, method: str, params: dict = None):
         self.jsonrpc = '2.0'
         self.id = id
         self.method = method
@@ -64,10 +64,7 @@ class JsonRpcRequest:
         }.items()
 
     def __str__(self):
-        a = dict(self)
-        if 'params' in a.keys() and a['params'] is not None:
-            a['params'] = dict(a['params'])
-        return json.dumps(del_none(a), ensure_ascii=False)
+        return json.dumps(del_none(dict(self)), ensure_ascii=False)
 
     def __repr__(self):
         return self.__str__()
@@ -81,13 +78,7 @@ class JsonRpcRequest:
             json_dct = json.loads(json_str)
             id = json_dct['id']
             method = json_dct['method']
-            params = None
-            if 'params' in json_dct.keys():
-                endpoint = json_dct['params']['endpoint'] if 'endpoint' in json_dct['params'].keys() else None
-                body = json_dct['params']['body'] if 'body' in json_dct['params'].keys() else None
-                query = json_dct['params']['query'] if 'query' in json_dct['params'].keys() else None
-                params = JsonRpcNostrestParams(endpoint, body, query)
-
+            params = json_dct['params']
             return JsonRpcRequest(id, method, params)
         except:
             return None

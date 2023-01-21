@@ -110,6 +110,14 @@ class Nostrest:
         with self.lock:
             del self.pending_requests[json_rpc_req.id]
             del self.pending_keys[private_key.public_key.hex()]
+        self._send_event(
+            encrypt_to_event(
+                NOSTREST_EPHEMERAL_EVENT_KIND,
+                JsonRpcRequest(str(uuid.uuid4()), 'GOTIT', {'eventId': event.id}).to_json(),
+                private_key,
+                to_public_key_hex
+            )
+        )
         return response_event
 
     def _wait_for_result(self, json_rpc_req_id, max_wait_time_seconds: int = 0):
@@ -200,11 +208,12 @@ class Nostrest:
 
     def _rest_request(self, method: str, rel_url: str, json: dict = None, params: dict = None):
         parse_result = urlparse(rel_url)
+        json_rpc_nostrest_params = JsonRpcNostrestParams(parse_result.path, json, params)
         json_rpc_request = JsonRpcRequest(str(uuid.uuid4()), method,
-                                          JsonRpcNostrestParams(parse_result.path, json, params))
+                                          dict(json_rpc_nostrest_params))
         json_rpc_response = self._send_request_and_wait_for_response(json_rpc_request, self.mint_public_key)
 
-        return RestResponse(json_rpc_request.params.endpoint,
+        return RestResponse(json_rpc_nostrest_params.endpoint,
                             json_rpc_response.result[
                                 'httpStatus'] if 'httpStatus' in json_rpc_response.result.keys() else 502,
                             json_rpc_response.result['body'] if 'body' in json_rpc_response.result.keys() else None,
