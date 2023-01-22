@@ -46,18 +46,29 @@ class Nostrest:
     pending_keys: dict[str, PrivateKey] = {}
     static_private_key: PrivateKey
     poller: threading.Thread
-    mint_public_key: str
     token_received_callback: Callable[[str, str], bool]
     is_running: bool = False
     state_file: str
     state: NostrestState
 
-    def __init__(self, state_file: str, static_privatekey_hex: str = None):
+    def __init__(self, state_file: str, static_privatekey_hex: str = None,
+                 token_received_callback: Callable[[str, str], bool] = None):
         self.generate_static_key(static_privatekey_hex)
+        self.token_received_callback = token_received_callback
         self.lock = threading.Lock()
         self.state_file = state_file
         self.state = NostrestState.from_file(self.state_file)
         self.pending_keys[self.static_private_key.public_key.hex()] = self.static_private_key
+
+        self.poller = threading.Thread(
+            target=self._poll,
+            args=(
+                self._on_event,
+            ),
+        )
+        self.is_running = True
+        self.poller.start()
+
         print("my public key is: " + self.static_private_key.public_key.hex())
 
     def _subscribe(self, filters):
@@ -82,8 +93,7 @@ class Nostrest:
     def _subscribe_to_ephemeral_public_key(self, public_key_hex: str):
         return self._subscribe(Filters([Filter(
             kinds=[NOSTREST_EPHEMERAL_EVENT_KIND],
-            tags={"#p": [public_key_hex]},
-            authors=[self.mint_public_key]
+            tags={"#p": [public_key_hex]}
         )]))
 
     def _close_subscription(self, subscription_id):
@@ -110,7 +120,7 @@ class Nostrest:
         with self.lock:
             del self.pending_requests[json_rpc_req.id]
             del self.pending_keys[private_key.public_key.hex()]
-        self._send_gotit(event.id, private_key)
+        self._send_gotit(event.id, private_key, event.public_key)
         return response_event
 
     def _wait_for_result(self, json_rpc_req_id, max_wait_time_seconds: int = 0):
@@ -157,17 +167,17 @@ class Nostrest:
 
         return self.pending_requests[token_id].response
 
-    def _send_henlo(self):
+    def _send_henlo(self, mint_public_key_hex):
         return self._send_request_and_wait_for_response(JsonRpcRequest(str(uuid.uuid4()), 'HENLO'),
-                                                        self.mint_public_key)
+                                                        mint_public_key_hex)
 
-    def _send_gotit(self, event_id, private_key):
+    def _send_gotit(self, event_id, private_key, mint_public_key_hex):
         self._send_event(
             encrypt_to_event(
                 NOSTREST_EPHEMERAL_EVENT_KIND,
                 JsonRpcRequest(str(uuid.uuid4()), 'GOTIT', {'eventId': event_id}).to_json(),
                 private_key,
-                self.mint_public_key
+                mint_public_key_hex
             )
         )
 
@@ -209,12 +219,17 @@ class Nostrest:
         event = encrypt_to_event(event_kind, message, self.static_private_key, to_pubkey_hex)
         self._send_event(event)
 
-    def _rest_request(self, method: str, rel_url: str, json: dict = None, params: dict = None):
-        parse_result = urlparse(rel_url)
+    def _rest_request(self, method: str, abs_url: str, json: dict = None, params: dict = None):
+        parse_result = urlparse(abs_url)
+        if parse_result.scheme != 'nostrest' or parse_result.hostname is None:
+            print("no nostrest url " + abs_url)
+            return
+
+        mint_public_key_hex = parse_result.hostname
         json_rpc_nostrest_params = JsonRpcNostrestParams(parse_result.path, json, params)
         json_rpc_request = JsonRpcRequest(str(uuid.uuid4()), method,
                                           dict(json_rpc_nostrest_params))
-        json_rpc_response = self._send_request_and_wait_for_response(json_rpc_request, self.mint_public_key)
+        json_rpc_response = self._send_request_and_wait_for_response(json_rpc_request, mint_public_key_hex)
 
         return RestResponse(json_rpc_nostrest_params.endpoint,
                             json_rpc_response.result[
@@ -231,27 +246,33 @@ class Nostrest:
                     callback_func(event_msg)
             time.sleep(0.1)
 
-    def start(self, mint_public_key: str, seed_relays: List[str] = [],
-              token_received_callback: Callable[[str, str], bool] = None):
-        self.mint_public_key = mint_public_key
-        self.token_received_callback = token_received_callback
-        self.poller = threading.Thread(
-            target=self._poll,
-            args=(
-                self._on_event,
-            ),
-        )
-        self.is_running = True
-        self.poller.start()
+    def _clear_relays(self):
+        self.relay_manager.close_connections()
+        # remove old relay urls
+        self.relay_manager.relays.clear()
 
-        for relay in seed_relays:
-            self.relay_manager.add_relay(relay)
+    def _set_relays(self, relay_urls: [str]):
+        # add new relay urls
+        for relay_url in relay_urls:
+            self.relay_manager.add_relay(relay_url)
+
+        # use the new relays and subscribe
         self.relay_manager.open_connections()
-
         # TODO: fix. this is not cool
         time.sleep(1.25)  # allow the connections to open...
 
-        itsme = self._send_henlo()
+    def henlo(self, abs_url: str, seed_relays: List[str] = []):
+
+        parse_result = urlparse(abs_url)
+        if parse_result.scheme != 'nostrest' or parse_result.hostname is None:
+            print("no nostrest url " + abs_url)
+            return False
+
+        mint_public_key_hex = parse_result.hostname
+
+        self._clear_relays()
+        self._set_relays(seed_relays)
+        itsme = self._send_henlo(mint_public_key_hex)
 
         if itsme is None:
             print("no reply to henlo")
@@ -263,37 +284,27 @@ class Nostrest:
             print("no itsme message")
             return False
 
-        self.relay_manager.close_connections()
-        # remove old relay urls
-        self.relay_manager.relays.clear()
-
-        # add new relay urls
-        for relay_url in itsme.result['relays']:
-            self.relay_manager.add_relay(relay_url)
-
-        # use the new relays and subscribe
-        self.relay_manager.open_connections()
-        # TODO: fix. this is not cool
-        time.sleep(1.25)  # allow the connections to open...
+        self._clear_relays()
+        self._set_relays(itsme.result['relays'])
         self._subscribe_to_static_public_key()
 
         return True
 
-    def stop(self):
+    def kthxbye(self):
         self.is_running = False
         self.poller.join()
         print("poller stopped")
-        self.relay_manager.close_connections()
+        self._clear_relays()
 
     def generate_static_key(self, privatekey_hex: str = None):
         pk = bytes.fromhex(privatekey_hex) if privatekey_hex else None
         self.static_private_key = PrivateKey(pk)
 
-    def post(self, rel_url: str, json: dict = None, params: dict = None):
-        return self._rest_request('post', rel_url, json, params)
+    def post(self, abs_url: str, json: dict = None, params: dict = None):
+        return self._rest_request('post', abs_url, json, params)
 
-    def get(self, rel_url: str, json: dict = None, params: dict = None):
-        return self._rest_request('get', rel_url, json, params)
+    def get(self, abs_url: str, json: dict = None, params: dict = None):
+        return self._rest_request('get', abs_url, json, params)
 
     def send_token(self, token: str, to_pubkey_hex: str):
         return self._send_token_and_wait_for_thx(token, self.static_private_key, to_pubkey_hex)

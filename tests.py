@@ -1,4 +1,3 @@
-import json
 import unittest
 
 from nostrest.jsonrpcish import JsonRpcRequest, JsonRpcResponse, JsonRpcError, JsonRpcNostrestParams
@@ -28,7 +27,6 @@ class TestJsonRpcIsh(unittest.TestCase):
         res = JsonRpcResponse.from_json(json_str)
         ser = res.to_json()
         assert json_str == ser
-
 
 
 if __name__ == '__main__':
