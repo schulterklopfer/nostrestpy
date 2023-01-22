@@ -46,15 +46,14 @@ class Nostrest:
     pending_keys: dict[str, PrivateKey] = {}
     static_private_key: PrivateKey
     poller: threading.Thread
-    token_received_callback: Callable[[str, str], bool]
     is_running: bool = False
     state_file: str
     state: NostrestState
 
-    def __init__(self, state_file: str, static_privatekey_hex: str = None,
-                 token_received_callback: Callable[[str, str], bool] = None):
+    token_received_callback: Callable[[str, str], bool] = None
+
+    def __init__(self, state_file: str, static_privatekey_hex: str = None):
         self.generate_static_key(static_privatekey_hex)
-        self.token_received_callback = token_received_callback
         self.lock = threading.Lock()
         self.state_file = state_file
         self.state = NostrestState.from_file(self.state_file)
@@ -137,6 +136,7 @@ class Nostrest:
     # p2p
     def _send_token_and_wait_for_thx(self, token: str, private_key: PrivateKey,
                                      to_public_key_hex: str):
+        # TODO: subscribe to public key derived from private_key
         event = encrypt_to_event(EventKind.ENCRYPTED_DIRECT_MESSAGE, 'cashu://' + token, private_key, to_public_key_hex)
         token_id = _generate_token_id(token)
         with self.lock:
@@ -307,7 +307,7 @@ class Nostrest:
         return self._rest_request('get', abs_url, json, params)
 
     def send_token(self, token: str, to_pubkey_hex: str):
-        return self._send_token_and_wait_for_thx(token, self.static_private_key, to_pubkey_hex)
+        return self._send_token_and_wait_for_thx(token, PrivateKey(), to_pubkey_hex)
 
     def send_dm(self, message: str, to_pubkey_hex: str):
         return self._send_encrypted_message_to(EventKind.ENCRYPTED_DIRECT_MESSAGE, message, to_pubkey_hex)

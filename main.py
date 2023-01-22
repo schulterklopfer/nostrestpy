@@ -31,8 +31,9 @@ def cb(from_pubkey_hex: str, messsage: str) -> bool:
 nostrest = Nostrest(
     state_file='./nostrest_state.json',
     static_privatekey_hex="8f27ea9abe6345d9276c0881b85dca6ff16188dc71d8abefd04a944e8a80e203",
-    token_received_callback=cb
 )
+
+nostrest.token_received_callback = cb
 
 # use this to look for mint and sync common relays by sending henlo through a bunch of seed relays
 synced = nostrest.henlo(
