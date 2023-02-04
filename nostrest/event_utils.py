@@ -1,5 +1,5 @@
 import base64
-
+from loguru import logger
 from nostr.event import Event
 from nostr.key import PublicKey, PrivateKey
 from nostr.message_pool import EventMessage
@@ -24,6 +24,7 @@ def decrypt_event(event: Event, private_key: PrivateKey):
             return aes.decrypt(iv, enc_text)
             # print(f"From {event.public_key[:5]}...: {dec_text}")
         except:
+            logger.error("Unable to decrypt message.")
             return None
 
 def encrypt_to_event(event_kind: int, message: str, private_key: PrivateKey, to_public_key_hex: str):
