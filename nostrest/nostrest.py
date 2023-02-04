@@ -25,6 +25,7 @@ from typing import Callable
 
 from nostrest.restresponse import RestResponse
 
+TOKEN_APP_URL_SCHEMA = 'cashu:'
 
 def _generate_token_id(token: str):
     digest = hashes.Hash(hashes.SHA256())
@@ -123,25 +124,18 @@ class Nostrest:
         await self._send_gotit(event.id, private_key, to_public_key_hex)
         return response_event
 
-#    def _wait_for_result(self, json_rpc_req_id, max_wait_time_seconds: int = 0):
-#        started_at = time.time()
-#        while json_rpc_req_id in self.pending_requests.keys() and \
-#                self.pending_requests[json_rpc_req_id].response is None:
-#            if max_wait_time_seconds > 0 and time.time() - started_at > max_wait_time_seconds:
-#                print("request timed out")
-#                break
-#            time.sleep(0.1)
-#        return self.pending_requests[json_rpc_req_id].response \
-#            if json_rpc_req_id in self.pending_requests.keys() else None
-
     # p2p
     async def _send_token_and_wait_for_thx(self, token: str, private_key: PrivateKey,
                                      to_public_key_hex: str):
         # TODO: subscribe to public key derived from private_key
-        event = encrypt_to_event(EventKind.ENCRYPTED_DIRECT_MESSAGE, 'cashu:' + token, private_key, to_public_key_hex)
+        subscription_id = await self._subscribe_to_ephemeral_public_key(private_key.public_key.hex())
+
+        event = encrypt_to_event(EventKind.ENCRYPTED_DIRECT_MESSAGE, TOKEN_APP_URL_SCHEMA + token, private_key, to_public_key_hex)
         token_id = _generate_token_id(token)
         async with self.lock:
-            self.pending_requests[token_id] = NostrRequest(event, 'cashu:' + token)
+            self.pending_requests[token_id] = NostrRequest(event, TOKEN_APP_URL_SCHEMA + token)
+            self.pending_keys[private_key.public_key.hex()] = private_key
+
         await self._send_event(event)
 #        currs = ThreadPoolExecutor(max_workers=3)
 #        curr_future_result = currs.submit(self._wait_for_token_thx, token_id, 0.5)
@@ -158,34 +152,16 @@ class Nostrest:
                 break
             await asyncio.sleep(0.1)
 
-        if token_id not in self.pending_requests.keys():
-            return False
+        await self._close_subscription(subscription_id)
 
-        if self.pending_requests[token_id].response is None:
-            return False
-
-        received = self.pending_requests[token_id].response
+        received = self.pending_requests[token_id].response if token_id in self.pending_requests.keys() else None
 
         async with self.lock:
-            del self.pending_requests[token_id]
-        return received
+            if token_id in self.pending_requests.keys():
+                del self.pending_requests[token_id]
+            del self.pending_keys[private_key.public_key.hex()]
 
-#    def _wait_for_token_thx(self, token_id, max_wait_time_seconds: int = 0):
-#        started_at = time.time()
-#        while token_id in self.pending_requests.keys() and \
-#                self.pending_requests[token_id].response is None:
-#            if max_wait_time_seconds > 0 and time.time() - started_at > max_wait_time_seconds:
-#                print("No thx received. How rude")
-#                break
-#            time.sleep(0.1)
-#
-#        if token_id not in self.pending_requests.keys():
-#            return False
-#
-#        if self.pending_requests[token_id].response is None:
-#            return False
-#
-#        return self.pending_requests[token_id].response
+        return received if received is not None else False
 
     def _send_henlo(self, mint_public_key_hex):
         return self._send_request_and_wait_for_response(JsonRpcRequest(str(uuid.uuid4()), 'HENLO'),
@@ -203,13 +179,13 @@ class Nostrest:
 
     async def _on_event(self, event_msg: EventMessage):
         if self.token_received_callback is not None and event_msg.event.kind == EventKind.ENCRYPTED_DIRECT_MESSAGE:
+            self.state.latest_event_at = event_msg.event.created_at
+            self.state.save(self.state_file)
             decrypted_content = decrypt_event(event_msg.event, self.static_private_key)
             if decrypted_content is not None:
-                if decrypted_content.lower().startswith('cashu:'):
-                    token = decrypted_content[8:]
+                if decrypted_content.lower().startswith(TOKEN_APP_URL_SCHEMA):
+                    token = decrypted_content[len(TOKEN_APP_URL_SCHEMA):]
                     token_id = _generate_token_id(token)
-                    self.state.latest_event_at = event_msg.event.created_at
-                    self.state.save(self.state_file)
                     if self.token_received_callback(event_msg.event.public_key, token):
                         await self._send_encrypted_message_to(NOSTREST_EPHEMERAL_EVENT_KIND, 'thx:' + token_id,
                                                               event_msg.event.public_key)
