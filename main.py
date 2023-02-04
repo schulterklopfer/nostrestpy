@@ -60,7 +60,10 @@ async def main():
         body = resp.json()
         print(body)
 
-    received = await nostrest.send_token('token', 'b9b8a9749442726a99b2e6d194d14d907857a10786ae0c47f79a07c31149e27d')
+    # send to myself
+    received = await nostrest.send_token('token', 'd209e16fadb854d893e286f7b880ddd43e3b8dea44611dad4e0c24d6329f26cf')
+
+    print("Token I sent was received by myself? "+str(received))
 
     await nostrest.kthxbye()
 
